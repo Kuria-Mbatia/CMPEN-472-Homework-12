@@ -929,4 +929,3 @@ hctvInvalid
             LDAA        #$FF         ; Invalid character
             RTS
 
-            END                     ; End of program

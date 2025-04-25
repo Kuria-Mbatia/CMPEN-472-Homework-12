@@ -1,0 +1,101 @@
+# CMPEN 472 Homework 12 Project Intelligence
+
+## Project Patterns
+1. Course Context:
+   - CMPEN 472 is an embedded systems course at Penn State
+   - Projects focus on HCS12 microcontroller programming
+   - Assignments build upon previous work
+
+2. Code Structure:
+   - Assembly language implementation
+   - Memory-mapped I/O
+   - Register-based operations
+   - Serial communication protocols
+
+3. Documentation Standards:
+   - Detailed header comments required
+   - Register usage documentation
+   - Memory map specifications
+   - Algorithm descriptions
+
+## Technical Setup
+1. Development Environment:
+   - CodeWarrior development software
+   - HCS12 assembly language
+   - CSM-12C128 board (24MHz)
+   - Terminal emulator for testing
+
+2. Project Organization:
+   - Previous_Project_Code/ contains reference implementations
+   - Project/ contains current work
+   - Memory bank documentation in memory-bank/
+
+## Critical Implementation Paths
+1. Memory Access:
+   - Safe memory range: $3000-$3800
+   - Variables: $3000-$30FF
+   - Program code: $3100-$xxxx
+
+2. Command Processing:
+   - Parse input from SCI
+   - Validate commands and parameters
+   - Execute memory operations
+   - Provide user feedback
+
+3. Error Handling:
+   - Address validation
+   - Command syntax checking
+   - Memory safety enforcement
+   - User feedback via terminal
+
+## Known Challenges
+1. Documentation:
+   - PDF instruction files need to be accessed
+   - Understanding relationship between HW12 and HW6
+   - Maintaining comprehensive documentation
+
+2. Technical:
+   - Memory safety considerations
+   - Command parsing complexity
+   - Error handling robustness
+   - Integration with existing code
+
+## User Preferences
+1. Project Structure:
+   - Memory bank documentation requested
+   - Clear separation of concerns
+   - Modular code organization
+   - Comprehensive documentation
+
+2. Code Style:
+   - Detailed comments required
+   - Clear register usage documentation
+   - Memory map specifications
+   - Algorithm descriptions
+
+## Evolution Record
+1. Initial Setup:
+   - Created memory bank structure
+   - Documented base implementation
+   - Identified core functionality
+
+2. Next Phase:
+   - Review instruction files
+   - Understand new requirements
+   - Plan implementation
+   - Begin development
+
+## Learning Points
+1. Assembly Programming:
+   - Register optimization
+   - Memory management
+   - I/O handling
+   - Command processing
+
+2. Documentation:
+   - Memory bank structure
+   - Technical documentation
+   - Progress tracking
+   - Implementation planning
+
+*Note: This file will be updated as we learn more about the project requirements and implementation details.* 
