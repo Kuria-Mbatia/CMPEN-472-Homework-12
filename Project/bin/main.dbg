@@ -469,94 +469,100 @@ phv_error   CLRA
 
 
 ***********************************************************************
-* parseDecValue: Parse a decimal number from address in tempPtr
-* Input:      tempPtr - Address of string to parse
-* Output:     D - Parsed decimal value (0-65535)
-* tempPtr - Updated to point after parsed value
-* Carry flag - set if valid, clear if invalid/overflow
-* Registers:  A, B, X, Y modified
+* parseDecValue: Parse an unsigned decimal number from string
+* Input:      tempPtr -> pointer to first potential decimal digit ('0'-'9')
+* Output:     D         = Parsed decimal value (0-65535)
+* tempPtr -> points to first char *after* parsed digits
+* Carry flag = set if valid number parsed, clear if invalid/overflow/no digits
+* Registers:  A, B, X, Y modified. Uses tempWord, digCount.
 ***********************************************************************
-parseDecValue
-        CLR     digCount
+parseDecValue:
+        CLR     digCount        ; Reset digit counter
         LDD     #0
-        STD     tempWord        ; result = 0
-        LDY     tempPtr         ; Y points to first char
+        STD     tempWord        ; Initialize result = 0
+        LDY     tempPtr         ; Y points to first potential char
 
-pdvLoop
-        LDAA    0,Y             ; Get char
-        JSR     isDecDigit
-        BCC     pdvCheckEnd     ; Not a digit, check if it's end or invalid
+pdvLoop:
+        LDAA    0,Y             ; Get char into A
+        JSR     isDecDigit      ; Check if A is '0'-'9'. C=1 if yes.
+        BCC     pdvCheckEnd     ; If not a digit, go check if parsing should end
 
-        ; We have a digit. Check for potential overflow BEFORE multiplying/adding.
-        LDX     tempWord        ; X = current result
-        LDAA    0,Y             ; A = digit char
+        ; --- It is a valid decimal digit ---
+        LDX     tempWord        ; X = current result (for overflow check)
+        LDAA    0,Y             ; Reload digit char into A
         SUBA    #'0'            ; A = digit value (0-9)
-        PSHA                    ; Save digit value
+        PSHA                    ; *** Push digit value onto stack ***
 
-        ; Check if current result (X) > 6553
-        CPX     #6553
-        BHI     pdvOverflowError ; If X > 6553, D*10 will overflow
+        ; Check for potential overflow BEFORE multiplying/adding.
+        ; Max value is 65535. Check if current_result * 10 + next_digit > 65535
+        CPX     #6553           ; Compare current result with 6553
+        BHI     pdvOverflow_Pop ; If X > 6553, then X*10 will definitely overflow
 
-        ; If X == 6553, check if digit > 5
-        BNE     pdvMultOK
-        PULA                    ; Restore digit value
-        CMPA    #5
-        PSHA                    ; Save digit value again
-        BHI     pdvOverflowError ; If X == 6553 and digit > 5, overflow (>= 65536)
+        ; If X == 6553, need to check if the incoming digit > 5
+        BNE     pdvCanMultiply  ; If X < 6553, multiplication is safe
+        ; X is exactly 6553. Check the digit.
+        PULA                    ; *** Pop digit value to check it ***
+        CMPA    #5              ; Compare digit with 5
+        PSHA                    ; *** Push digit value back onto stack *** (still needed for add)
+        BHI     pdvOverflow_Pop ; If X == 6553 and digit > 5, then 6553*10 + digit >= 65536 -> overflow
 
-pdvMultOK
-        PULA                    ; Restore digit value to A
-        PSHA                    ; Save it again (for adding later)
+pdvCanMultiply:
+        ; Digit value (0-9) is currently on the stack. Multiplication won't overflow.
         LDD     tempWord        ; D = current result
-        ; Multiply D by 10 (safe method)
-        BEQ     pdvAddDigit     ; If result is 0, skip multiply
-        PSHX                    ; Save X (used by ADDD later)
-        STD     tempWord        ; Save D for D*2 calc
-        LSLD                    ; D*2
-        XGDX                    ; X=D*2
-        LDD     tempWord        ; D
-        LSLD                    ; D*2
-        LSLD                    ; D*4
-        LSLD                    ; D*8
-        ADDD    X               ; D*10 (safe as overflow checked)
-        PULX                    ; Restore original X
-        STD     tempWord        ; Store D*10
+        ; Multiply D by 10 (using shifts and adds)
+        CPD     #0              ; Check if current result is 0
+        BEQ     pdvAddDigit_Pop ; If result is 0, skip multiply, just add digit (which is on stack)
 
-pdvAddDigit
-        PULA                    ; Restore digit value to A
+        ; Multiply non-zero result by 10: D = D*10 = (D*8 + D*2)
+        XGDX                    ; Save D (current result) in X temporarily
+        LSLD                    ; D = D*2
+        LSLD                    ; D = D*4
+        LSLD                    ; D = D*8
+        ADDD    X               ; D = (D*8) + (original D saved in X) = D*10
+        ; No BCS check needed here as overflow was pre-checked
+        STD     tempWord        ; Store D*10 result temporarily
+
+pdvAddDigit_Pop:
+        ; Digit value (0-9) is still on the stack
+        PULA                    ; *** Pop digit value from stack into A ***
         TAB                     ; B = digit value
-        CLRA                    ; D = 000digit
-        ADDD    tempWord        ; D = (Result*10) + digit
-        BCS     pdvOverflowError ; If final add overflows, error
-        STD     tempWord        ; Store new result
+        CLRA                    ; D = 000 : digit_value
+        ADDD    tempWord        ; D = (Result*10) + digit_value
+        BCS     pdvOverflow     ; If final add overflows (e.g., 65530 + 6), it's an error. (Stack is clean here)
+        STD     tempWord        ; Store final new result
 
-        INC     digCount
-        INY                     ; Next char
-        BRA     pdvLoop
+        INC     digCount        ; Count this valid digit
+        INY                     ; Advance string pointer Y
+        BRA     pdvLoop         ; Go process next character
 
-pdvCheckEnd
-        ; Current char (in A, from start of pdvLoop) is not a digit
+pdvCheckEnd:
+        ; Reached here because current char (in A from pdvLoop) is not a decimal digit
+        ; Check if it's a valid terminator (NULL or SPACE)
         CMPA    #NULL
         BEQ     pdvFinalCheck
         CMPA    #SPACE
         BEQ     pdvFinalCheck
-        ; Invalid character encountered mid-number
-pdvError
-        CLC                     ; Clear carry for error
-        LDD     #0              ; Return 0
+        ; If it's neither NULL nor SPACE, it's an invalid character mid-number
+        BRA     pdvError        ; Go to error exit
+
+pdvFinalCheck:
+        ; Reached end (NULL or SPACE) after parsing potentially valid digits
+        TST     digCount        ; Were any digits actually parsed?
+        BEQ     pdvError        ; If count is 0 (no digits found), it's an error
+        ; Valid decimal number parsed (1 or more digits)
+        STY     tempPtr         ; Update caller's pointer to point after the parsed digits
+        LDD     tempWord        ; Load the final result into D
+        SEC                     ; Set Carry flag for success
         RTS
 
-pdvOverflowError
-        PULA                    ; Clean up stack if digit was pushed
-        BRA     pdvError
-
-pdvFinalCheck
-        ; Reached end (NULL or SPACE) after parsing digits
-        TST     digCount        ; Were any digits parsed?
-        BEQ     pdvError        ; No digits found is an error
-        STY     tempPtr         ; Update pointer to after digits
-        LDD     tempWord        ; Load result
-        SEC                     ; Set carry for success
+pdvOverflow_Pop:
+        PULA                    ; *** Pop the digit value off stack before error exit ***
+pdvOverflow:
+        ; Overflow detected during multiplication or final add
+pdvError:
+        ; Common error exit (invalid char, no digits, overflow)
+        CLC                     ; Clear Carry flag for error
+        LDD     #0              ; Return 0 in D (optional)
         RTS
         
 ***********************************************************************
@@ -705,33 +711,29 @@ writeMemory
             RTS
 
 ***********************************************************************
-* printByteBin: Print a byte in binary format (8 bits)
+* printByteBin: Print a byte in binary format (8 bits) - CORRECTED
 * Input:      A - byte to print
-* Output:     Terminal display
+* Output:     Prints 8 '0' or '1' characters
 * Registers:  A, B modified
 ***********************************************************************
-printByteBin
-            PSHA                    ; Save original value
-            LDAB        #8          ; 8 bits to print
-            
-pBinLoop    PSHA                    ; Save current value
-            ANDA        #$80        ; Mask high bit
-            BEQ         pBinZero
-            
-            LDAA        #'1'        ; Print 1 for set bit
-            BRA         pBinNext
-            
-pBinZero    LDAA        #'0'        ; Print 0 for clear bit
-            
-pBinNext    JSR         putchar
-            PULA                    ; Restore value
-            ASLA                    ; Shift left for next bit
-            DECB                    ; Count bits
-            BNE         pBinLoop    ; Loop for all 8 bits
-            
-            PULA                    ; Restore original value
-            RTS
+printByteBin:
+            PSHA                    ; Save original byte A
+            LDAB        #8          ; B = loop counter (8 bits)
+            ; A holds the byte whose bits we want to print, MSB first
+pBinLoop_Fixed:
+            ASLA                    ; Shift MSB of A into Carry. A is modified (shifted left).
+            PSHA                    ; Save modified A (because putchar clobbers A)
+            LDAA        #'0'        ; Assume bit was 0
+            BCC         pBinZero_Fixed ; If Carry Clear, bit was 0
+            LDAA        #'1'        ; If Carry Set, bit was 1
+pBinZero_Fixed:
+            JSR         putchar     ; Print '0' or '1'
+            PULA                    ; Restore modified A (shifted value)
+            DECB                    ; Decrement bit counter
+            BNE         pBinLoop_Fixed; Loop for all 8 bits
 
+            PULA                    ; Restore original A from the start
+            RTS
 ***********************************************************************
 * printByteHex: Print a byte in hexadecimal format
 * Input:      A - byte to print
@@ -789,7 +791,7 @@ printWordHex
 printWordDec
         PSHX                    ; Save X
         PSHY                    ; Save Y
-
+        
         CLR     digCount        ; Use memory variable for count, clear it first
 
         ; Special case for zero

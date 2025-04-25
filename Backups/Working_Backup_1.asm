@@ -60,18 +60,19 @@ DOLLAR      EQU         $24         ; ASCII $ character
 SAFE_MEM_START EQU     $0000       ; Start of safe memory area (allow any address)
 SAFE_MEM_END   EQU     $FFFF       ; End of safe memory area (allow any address)
 
-MAX_CMD_LEN EQU         16          ; Maximum command length
+MAX_CMD_LEN EQU         80          ; Maximum command length
 
 ***********************************************************************
 * Data Section - Variables and Strings
 ***********************************************************************
-            ORG         $3000       ; Start of data section
+            ORG         $3800       ; Start of data section
 
 cmdBuffer   DS.B        MAX_CMD_LEN ; Command input buffer
 cmdLength   DS.B        1           ; Length of command
 address     DS.W        1           ; Memory address for commands
 dataValue   DS.W        1           ; Data value for W command
-tempByte    DS.B        1           ; Temporary storage
+;tempByte    DS.B        1           ; Temporary storage
+tempPtr     DS.W        1
 isHexData   DS.B        1           ; Flag for hex/decimal data format
 decBuffer   DS.B        6           ; Buffer for decimal conversion
 hexValid    DS.B        1           ; Flag to track if all chars are valid hex
@@ -125,7 +126,7 @@ printDebug
             PULD                    ; Restore D
             RTS
 
-pstart      LDS         #$3800      ; Initialize stack pointer to valid RAM area
+pstart      LDS         #$3F00      ; Initialize stack pointer to valid RAM area
 
             ; Initialize hardware
             LDAA        #%11111111  ; Set PORTB as output
@@ -296,59 +297,16 @@ procShowCmd ; Process S command - format should be S$xxxx
             CMPA        #3
             BLO         invalidCmd
             
-            LDAA        1,X         ; Second character should be $
-            CMPA        #DOLLAR
-            BNE         invalidCmd
-            
-            ; Clear address first to avoid memory corruption
-            CLRA
-            CLRB
-            STD         address     ; Start with clean address
-            
-            ; Here's the key change: manually parse the 4-character hex address
-            ; This avoids issues with the general hex parser
-            LDY         #0          ; Initialize parsed value
-            
-            ; First character (thousands place)
-            LDAA        2,X         ; Get first hex digit
-            JSR         hexCharToVal
-            CMPA        #$FF        ; Check for error
-            BEQ         invalidAddr
-            LDAB        #$10        ; Multiply by 16^3 (4096)
-            MUL                     ; A*B -> D
-            TFR         D,Y         ; Save to Y
-            
-            ; Second character (hundreds place)
-            LDAA        3,X         ; Get second hex digit
-            JSR         hexCharToVal
-            CMPA        #$FF        ; Check for error
-            BEQ         invalidAddr
-            LDAB        #$01        ; Multiply by 16^2 (256)
-            MUL                     ; A*B -> D
-            ADDD        0,Y         ; Add to running total
-            TFR         D,Y         ; Save to Y
-            
-            ; Third character (tens place)
-            LDAA        4,X         ; Get third hex digit
-            JSR         hexCharToVal
-            CMPA        #$FF        ; Check for error
-            BEQ         invalidAddr
-            LDAB        #$10        ; Multiply by 16^1 (16)
-            MUL                     ; A*B -> D
-            ADDD        0,Y         ; Add to running total
-            TFR         D,Y         ; Save to Y
-            
-            ; Fourth character (ones place)
-            LDAA        5,X         ; Get fourth hex digit
-            JSR         hexCharToVal
-            CMPA        #$FF        ; Check for error
-            BEQ         invalidAddr
-            ; No multiplication needed for last digit
-            CLRB                    ; Clear B for addition
-            ADDD        0,Y         ; Add to running total
-            
-            ; Address is now in D
-            STD         address     ; Store parsed address
+            LDAA    1,X             ; must be '$'
+            CMPA    #DOLLAR
+            BNE     invalidCmd
+
+            LEAX    2,X             ; X -> first hex digit
+            STX     tempPtr        ; tempPtr = pointer for parser
+            JSR     parseHexValue   ; returns value in D, C=1 if OK
+            BCC     invalidAddr     ; C=0 → bad hex or >4 digits
+
+            STD     address         ; save parsed 16-bit address
             
             ; Execute show memory command
             JSR         showMemory
@@ -360,392 +318,253 @@ invalidAddr LDX         #msgInvAddr  ; Invalid address message
             RTS
 
 procWriteCmd ; Process W command - format should be W$xxxx data
-            ; Check for minimum command length - need at least "W$X Y"
-            LDAA        cmdLength
-            CMPA        #5
-            BLO         invalidCmd
-            
-            LDAA        1,X         ; Second character should be $
-            CMPA        #DOLLAR
-            BNE         invalidCmd
-            
-            ; Clear address first to avoid memory corruption
-            CLRA
-            CLRB
-            STD         address     ; Start with clean address
-            
-            ; Use the same reliable manual parsing approach as S command
-            ; Manually parse the 4-character hex address
-            LDY         #0          ; Initialize parsed value
-            
-            ; First character (thousands place)
-            LDAA        2,X         ; Get first hex digit
-            JSR         hexCharToVal
-            CMPA        #$FF        ; Check for error
-            BEQ         invalidAddr
-            LDAB        #$10        ; Multiply by 16^3 (4096)
-            MUL                     ; A*B -> D
-            TFR         D,Y         ; Save to Y
-            
-            ; Second character (hundreds place)
-            LDAA        3,X         ; Get second hex digit
-            JSR         hexCharToVal
-            CMPA        #$FF        ; Check for error
-            BEQ         invalidAddr
-            LDAB        #$01        ; Multiply by 16^2 (256)
-            MUL                     ; A*B -> D
-            ADDD        0,Y         ; Add to running total
-            TFR         D,Y         ; Save to Y
-            
-            ; Third character (tens place)
-            LDAA        4,X         ; Get third hex digit
-            JSR         hexCharToVal
-            CMPA        #$FF        ; Check for error
-            BEQ         invalidAddr
-            LDAB        #$10        ; Multiply by 16^1 (16)
-            MUL                     ; A*B -> D
-            ADDD        0,Y         ; Add to running total
-            TFR         D,Y         ; Save to Y
-            
-            ; Fourth character (ones place)
-            LDAA        5,X         ; Get fourth hex digit
-            JSR         hexCharToVal
-            CMPA        #$FF        ; Check for error
-            BEQ         invalidAddr
-            ; No multiplication needed for last digit
-            CLRB                    ; Clear B for addition
-            ADDD        0,Y         ; Add to running total
-            
-            ; Address is now in D
-            STD         address     ; Store parsed address
-            
-            ; Clear data value to avoid memory corruption
-            CLRA
-            CLRB
-            STD         dataValue   ; Start with clean data value
-            
-            ; Now find the space after the address
-            LDAB        #6          ; Position after address (W$xxxx)
-            ABX                     ; X points to position after address
-            
-findSpace   LDAA        0,X         ; Get character
-            CMPA        #NULL       ; End of string?
-            BEQ         invalidData ; No data provided
-            CMPA        #SPACE      ; Space?
-            BEQ         foundSpace  ; Yes, found it
-            INX                     ; Next character
-            BRA         findSpace
-            
-foundSpace  ; Found space, now skip any additional spaces
-skipSpaces  INX                     ; Skip this space
-            LDAA        0,X         ; Get next character
-            CMPA        #SPACE      ; Another space?
-            BEQ         skipSpaces  ; Yes, skip it
-            CMPA        #NULL       ; End of string?
-            BEQ         invalidData ; No data provided
-            
-            ; Now check if data starts with $ (hex)
-            CMPA        #DOLLAR
-            BEQ         parseHexData
-            
-            ; Parse as decimal
-            TFR         X,Y         ; Transfer X to Y for parsing
-            STY         tempByte    ; Store pointer position
-            JSR         parseDecValue
-            BCC         invalidData ; If carry clear, invalid data
-            
-            STD         dataValue   ; Store parsed data
-            
-            ; Execute write memory command
-            JSR         writeMemory
-            
-            RTS
+        ; Check for minimum command length - need at least "W$X v" (5 chars)
+        LDAA    cmdLength
+        CMPA    #5
+        BLO     invalidCmd
 
-parseHexData
-            ; Skip $ and parse hex value
-            INX                     ; Skip $
-            TFR         X,Y         ; Transfer X to Y for parsing
-            STY         tempByte    ; Store pointer position
-            JSR         parseHexValue
-            BCC         invalidData ; If carry clear, invalid data
-            
-            STD         dataValue   ; Store parsed data
-            
-            ; Execute write memory command
-            JSR         writeMemory
-            
-            RTS
+        LDAA    1,X             ; Check second char must be '$'
+        CMPA    #DOLLAR
+        BNE     invalidCmd
 
-invalidData LDX         #msgInvData  ; Invalid data message
-            JSR         printmsg
-            RTS
+        ; Parse the address part
+        LEAX    2,X             ; X -> first potential hex digit of address
+        STX     tempPtr         ; Save pointer for parseHexValue
+        JSR     parseHexValue   ; D = address, C=1 if OK, tempPtr updated
+        BCC     invalidAddr     ; Branch if parseHexValue failed (C=0)
+
+        STD     address         ; Save the successfully parsed 16-bit address
+
+        ; Clear data value variable before parsing new data
+        LDD     #0
+        STD     dataValue
+
+        ; Find the space separating address and data
+        ; parseHexValue updated tempPtr to point AFTER the address
+        LDY     tempPtr         ; Y points to the char after the parsed address
+
+findSpace
+        LDAA    0,Y             ; Get character
+        CMPA    #NULL           ; End of string?
+        BEQ     invalidData     ; No data found after address
+        CMPA    #SPACE          ; Is it a space?
+        BEQ     foundSpace      ; Yes, found the separator
+
+        ; If the character after the address isn't a space or NULL,
+        ; it implies invalid command format (e.g., S$3000ABC)
+        ; According to examples, data must follow a space.
+        BRA     invalidData     ; Treat as invalid data format
+
+foundSpace  ; Found space, now skip any *additional* spaces
+skipSpaces
+        INY                     ; Point past the space
+        LDAA    0,Y             ; Get the next character
+        CMPA    #SPACE          ; Is it another space?
+        BEQ     skipSpaces      ; Yes, skip it and check again
+        CMPA    #NULL           ; Is it the end of the string?
+        BEQ     invalidData     ; No data value found after space(s)
+
+        ; Y now points to the first character of the data value
+        ; A contains the first character of the data value
+        STY     tempPtr         ; Store this pointer for data parsing routines
+
+        ; Check if data starts with '$' (hex)
+        CMPA    #DOLLAR
+        BEQ     parseW_HexData  ; Branch if it's hex data
+
+        ; --- Parse data as Decimal ---
+        ; tempPtr is already pointing to the first decimal digit
+        JSR     parseDecValue   ; D = parsed value, C=1 if OK
+        BCC     invalidData     ; Branch if decimal parse failed
+
+        STD     dataValue       ; Store parsed decimal data
+        JSR     writeMemory     ; Write to memory and display
+        RTS                     ; Return to main loop
+
+parseW_HexData
+        ; Y was pointing to '$', A contained '$'
+        INY                     ; Skip the '$'
+        LDAA    0,Y             ; Check if anything follows '$'
+        CMPA    #NULL
+        BEQ     invalidData     ; Error if just '$' with no digits
+        CMPA    #SPACE          ; Error if space right after '$'
+        BEQ     invalidData
+        ; Y now points to the first hex digit of the data
+        STY     tempPtr         ; Update tempPtr for parseHexValue
+
+        JSR     parseHexValue   ; D = parsed value, C=1 if OK
+        BCC     invalidData     ; Branch if hex parse failed
+
+        STD     dataValue       ; Store parsed hex data
+        JSR     writeMemory     ; Write to memory and display
+        RTS                     ; Return to main loop
+
+invalidData
+        LDX     #msgInvData     ; Invalid data message
+        JSR     printmsg
+        RTS
 
 ***********************************************************************
-* parseHexValue: Parse a hex number from address in tempByte
-* Input:      tempByte - Address of string to parse
-* Output:     D - Parsed hex value
-*             tempByte - Updated to point after parsed value
-*             Carry flag - set if valid, clear if invalid
-* Registers:  A, B, X, Y modified
+* parseHexValue  –  convert up to four hex digits to a 16-bit value
+*   entry :  tempByte  → pointer to first digit (‘0’–‘9’, ‘A’–‘F’, ‘a’–‘f’)
+*   exit  :  D         = value (0-FFFFh)
+*            tempByte  → first char that is not a hex digit
+*            C-flag    = 1 success, 0 syntax error / > 4 digits
+*   regs  :  A,B,X,Y clobbered
 ***********************************************************************
+
 parseHexValue
-            ; Debug the input string
-            PSHY
-            PSHX
-            LDX         tempByte    ; Load pointer value
-            JSR         printmsg    ; Print the string being parsed
-            
-            LDX         #msgLF
-            JSR         printmsg
-            PULX
-            PULY
-            
-            ; First check if we have valid hex digits
-            LDY         tempByte    ; Get starting position
-            
-            ; Clear result
-            CLRA                    ; Clear A
-            CLRB                    ; Clear B
-            STD         tempWord    ; Initialize to zero
-            
-            ; Clear digit counter
-            CLR         digCount    ; Reset digit counter
-            
-; Validation phase - make sure we have valid hex digits
-phvCheck    LDAA        0,Y         ; Get character
-            CMPA        #NULL       ; End of string?
-            BEQ         phvCheckDone
-            CMPA        #SPACE      ; Space?
-            BEQ         phvCheckDone
-            
-            ; Check if valid hex digit
-            JSR         isHexDigit
-            BCC         phvError    ; Invalid character
-            
-            INY                     ; Next character
-            INC         digCount    ; Count this digit
-            
-            ; Make sure we don't have too many digits (max 4 for 16-bit value)
-            LDAA        digCount
-            CMPA        #5
-            BHS         phvError    ; Too many digits
-            
-            BRA         phvCheck    ; Continue checking
-            
-phvCheckDone
-            ; If no digits, error
-            TST         digCount
-            BEQ         phvError    ; No digits found
-            
-            ; Reset position and digit counter for actual parsing
-            LDY         tempByte    ; Reset to start position
-            CLR         digCount    ; Reset digit counter
-            
-            ; Clear result again (to be safe)
-            CLRA                    ; Clear A
-            CLRB                    ; Clear B
-            STD         tempWord    ; Reset to zero
-            
-; Conversion loop - convert hex digits to value
-phvLoop     LDAA        0,Y         ; Get character
-            CMPA        #NULL       ; End of string?
-            BEQ         phvDone
-            CMPA        #SPACE      ; Space?
-            BEQ         phvDone
-            
-            ; Shift current value left by 4 bits (multiply by 16)
-            LDD         tempWord
-            LSLD                    ; Shift left 1 bit  (x2)
-            LSLD                    ; Shift left 1 bit  (x4)
-            LSLD                    ; Shift left 1 bit  (x8)
-            LSLD                    ; Shift left 1 bit  (x16)
-            STD         tempWord    ; Save shifted value
-            
-            ; Convert current character to hex value
-            LDAA        0,Y         ; Get character
-            
-            ; Check if 0-9 or A-F or a-f
-            CMPA        #'9'        
-            BHI         phvAlpha    ; > '9', so it's a letter
-            
-            ; It's a digit 0-9
-            SUBA        #'0'        ; Convert to value 0-9
-            BRA         phvAddDigit
-            
-phvAlpha    ; Check if uppercase A-F
-            CMPA        #'F'
-            BHI         phvLower    ; > 'F', must be lowercase
-            
-            ; It's uppercase A-F
-            SUBA        #'A'        ; Get 0-5
-            ADDA        #10         ; Convert to value 10-15
-            BRA         phvAddDigit
-            
-phvLower    ; Must be lowercase a-f
-            SUBA        #'a'        ; Get 0-5 
-            ADDA        #10         ; Convert to value 10-15
-            
-phvAddDigit ; Add digit value to result
-            CLRB                    ; Clear B (for addition)
-            ADDD        tempWord    ; Add to current value
-            STD         tempWord    ; Save new value
-            
-            INY                     ; Next character
-            INC         digCount    ; Count this digit
-            
-            ; Debug the running calculation
-            PSHX
-            PSHY
-            JSR         printDebug  ; Show current value
-            PULY
-            PULX
-            
-            BRA         phvLoop     ; Continue conversion
-            
-phvDone     ; Success - update pointer and return value
-            STY         tempByte    ; Update pointer position
-            LDD         tempWord    ; Get final value
-            
-            ; Debug final parsed value
-            PSHX
-            JSR         printDebug  ; Show final parsed value
-            PULX
-            
-            SEC                     ; Set carry to indicate success
-            RTS
-            
-phvError    ; Error - invalid hex value
-            CLRA
+            CLRA            ; D = 0
             CLRB
-            CLC                     ; Clear carry to indicate error
+            STD   tempWord  ; tempWord will hold the running value
+            LDY   tempPtr  ; Y traverses the string
+            CLR   digCount
+
+phv_loop    LDAA   0,Y            ; get next character
+            JSR    isHexDigit
+            BCC    phv_done       ; stop on first non-hex char
+
+;------------ convert ASCII digit → 0-15 -------------------------------
+            LDAA   0,Y
+            JSR    hexCharToVal   ; A = nibble value (0-15)
+
+;------------ value = (value << 4) + nibble ----------------------------
+            PSHA                   ; save nibble on stack
+            CLC                    ; *** clear carry BEFORE shifting ***
+
+            LDD    tempWord        ; current 16-bit value
+            LSLD                   ; ×2
+            LSLD                   ; ×4
+            LSLD                   ; ×8
+            LSLD                   ; ×16
+            STD    tempWord        ; store shifted value
+
+            PULA                   ; A = nibble
+            TAB                    ; B = nibble, A = 0
+            CLRA
+            ADDD   tempWord        ; add nibble
+            STD    tempWord        ; save new result
+
+            INY                    ; advance source pointer
+            INC    digCount        ; count this digit
+            LDAA   digCount
+            CMPA   #4
+            BLS    phv_loop        ; loop while ≤ 4 digits
+
+            BRA    phv_error       ; >4 digits → error
+
+
+
+phv_done    TST   digCount
+            BEQ   phv_error         ; no digits at all
+            STY   tempPtr          ; update caller's pointer
+            LDD   tempWord
+            SEC                     ; good exit
             RTS
 
-***********************************************************************
-* parseDecValue: Parse a decimal number from address in tempByte
-* Input:      tempByte - Address of string to parse
-* Output:     D - Parsed decimal value
-*             tempByte - Updated to point after parsed value
-*             Carry flag - set if valid, clear if invalid
-* Registers:  A, B, X, Y modified
-***********************************************************************
-parseDecValue
-            ; Clear result values
-            CLR         digCount    ; Reset digit counter
-            CLRA                    ; Clear A
-            CLRB                    ; Clear B
-            STD         tempWord    ; Store initial value = 0
-            
-            ; First check if we have valid decimal digits
-            LDY         tempByte    ; Get starting position
-            
-pdvCheck    LDAA        0,Y         ; Get character
-            CMPA        #NULL       ; End of string?
-            BEQ         pdvCheckDone
-            CMPA        #SPACE      ; Space?
-            BEQ         pdvCheckDone
-            
-            ; Check if valid decimal digit
-            JSR         isDecDigit
-            BCC         pdvError    ; Invalid character
-            
-            INY                     ; Next character
-            INC         digCount    ; Count this digit
-            
-            ; Make sure we don't have too many digits (max 5 for 16-bit value)
-            LDAB        digCount
-            CMPB        #6
-            BHS         pdvError    ; Too many digits
-            
-            BRA         pdvCheck    ; Continue checking
-            
-pdvCheckDone
-            ; If no digits, error
-            LDAA        digCount
-            BEQ         pdvError    ; No digits parsed
-            
-            ; Valid digits, now convert to value
-            ; Reset for actual parsing
-            CLR         digCount    ; Reset digit counter
-            LDY         tempByte    ; Reset to start position
-            
-            ; Clear result
-            CLRA                    ; Clear A
-            CLRB                    ; Clear B
-            STD         tempWord    ; Ensure tempWord is cleared
-            
-; Main conversion loop            
-pdvLoop     LDAA        0,Y         ; Get character
-            CMPA        #NULL       ; End of string?
-            BEQ         pdvDone
-            CMPA        #SPACE      ; Space?
-            BEQ         pdvDone
-            
-            ; Multiply current result by 10
-            ; D = D * 10
-            
-            ; Get current value
-            LDD         tempWord
-            
-            ; Method: D*10 = (D*8) + (D*2)
-            ; Save D for later
-            STD         tempWord    ; Save original value
-            
-            ; Compute D*2
-            LSLD                    ; D = D * 2
-            
-            ; Save D*2
-            XGDX                    ; X = D*2, swap D and X
-            
-            ; Get original value again
-            LDD         tempWord
-            
-            ; Compute D*8
-            LSLD                    ; D = D * 2  (now D*2)
-            LSLD                    ; D = D * 2  (now D*4)
-            LSLD                    ; D = D * 2  (now D*8)
-            
-            ; Add D*2 to get D*10
-            ADDD        2,SP+       ; D = D*8 + D*2 = D*10 (retrieve D*2 from stack)
-            
-            ; Save D*10
-            STD         tempWord
-            
-            ; Get the current digit
-            LDAA        0,Y         ; Get the digit character
-            SUBA        #'0'        ; Convert ASCII to value (0-9)
-            TAB                     ; Copy to B
-            CLRA                    ; Clear A for 16-bit addition
-            
-            ; Add digit to result
-            ADDD        tempWord    ; D = D*10 + digit
-            STD         tempWord    ; Save result
-            
-            INY                     ; Next character
-            INC         digCount    ; Count this digit
-            
-            ; Check if we're going to overflow a 16-bit value
-            LDAA        digCount
-            CMPA        #6          ; Max 5 decimal digits (65535 is highest 16-bit value)
-            BHS         pdvError    ; Too many digits - would overflow
-            
-            BRA         pdvLoop     ; Continue with next digit
-            
-pdvDone     ; Success - return result in D
-            STY         tempByte    ; Update position pointer
-            LDD         tempWord    ; Get final result
-            
-            ; No need for additional checks - if the value fits in D register,
-            ; it's automatically within the 0-65535 range
-            
-            SEC                     ; Set carry to indicate success
-            RTS
-            
-pdvError    ; Error - invalid decimal number
-            CLRA                    ; Clear A
-            CLRB                    ; Clear B
-            CLC                     ; Clear carry to indicate error
+phv_error   CLRA
+            CLRB
+            CLC
             RTS
 
+
+***********************************************************************
+* parseDecValue: Parse an unsigned decimal number from string
+* Input:      tempPtr -> pointer to first potential decimal digit ('0'-'9')
+* Output:     D         = Parsed decimal value (0-65535)
+* tempPtr -> points to first char *after* parsed digits
+* Carry flag = set if valid number parsed, clear if invalid/overflow/no digits
+* Registers:  A, B, X, Y modified. Uses tempWord, digCount.
+***********************************************************************
+parseDecValue:
+        CLR     digCount        ; Reset digit counter
+        LDD     #0
+        STD     tempWord        ; Initialize result = 0
+        LDY     tempPtr         ; Y points to first potential char
+
+pdvLoop:
+        LDAA    0,Y             ; Get char into A
+        JSR     isDecDigit      ; Check if A is '0'-'9'. C=1 if yes.
+        BCC     pdvCheckEnd     ; If not a digit, go check if parsing should end
+
+        ; --- It is a valid decimal digit ---
+        LDX     tempWord        ; X = current result (for overflow check)
+        LDAA    0,Y             ; Reload digit char into A
+        SUBA    #'0'            ; A = digit value (0-9)
+        PSHA                    ; *** Push digit value onto stack ***
+
+        ; Check for potential overflow BEFORE multiplying/adding.
+        ; Max value is 65535. Check if current_result * 10 + next_digit > 65535
+        CPX     #6553           ; Compare current result with 6553
+        BHI     pdvOverflow_Pop ; If X > 6553, then X*10 will definitely overflow
+
+        ; If X == 6553, need to check if the incoming digit > 5
+        BNE     pdvCanMultiply  ; If X < 6553, multiplication is safe
+        ; X is exactly 6553. Check the digit.
+        PULA                    ; *** Pop digit value to check it ***
+        CMPA    #5              ; Compare digit with 5
+        PSHA                    ; *** Push digit value back onto stack *** (still needed for add)
+        BHI     pdvOverflow_Pop ; If X == 6553 and digit > 5, then 6553*10 + digit >= 65536 -> overflow
+
+pdvCanMultiply:
+        ; Digit value (0-9) is currently on the stack. Multiplication won't overflow.
+        LDD     tempWord        ; D = current result
+        ; Multiply D by 10 (using shifts and adds)
+        CPD     #0              ; Check if current result is 0
+        BEQ     pdvAddDigit_Pop ; If result is 0, skip multiply, just add digit (which is on stack)
+
+        ; Multiply non-zero result by 10: D = D*10 = (D*8 + D*2)
+        XGDX                    ; Save D (current result) in X temporarily
+        LSLD                    ; D = D*2
+        LSLD                    ; D = D*4
+        LSLD                    ; D = D*8
+        ADDD    X               ; D = (D*8) + (original D saved in X) = D*10
+        ; No BCS check needed here as overflow was pre-checked
+        STD     tempWord        ; Store D*10 result temporarily
+
+pdvAddDigit_Pop:
+        ; Digit value (0-9) is still on the stack
+        PULA                    ; *** Pop digit value from stack into A ***
+        TAB                     ; B = digit value
+        CLRA                    ; D = 000 : digit_value
+        ADDD    tempWord        ; D = (Result*10) + digit_value
+        BCS     pdvOverflow     ; If final add overflows (e.g., 65530 + 6), it's an error. (Stack is clean here)
+        STD     tempWord        ; Store final new result
+
+        INC     digCount        ; Count this valid digit
+        INY                     ; Advance string pointer Y
+        BRA     pdvLoop         ; Go process next character
+
+pdvCheckEnd:
+        ; Reached here because current char (in A from pdvLoop) is not a decimal digit
+        ; Check if it's a valid terminator (NULL or SPACE)
+        CMPA    #NULL
+        BEQ     pdvFinalCheck
+        CMPA    #SPACE
+        BEQ     pdvFinalCheck
+        ; If it's neither NULL nor SPACE, it's an invalid character mid-number
+        BRA     pdvError        ; Go to error exit
+
+pdvFinalCheck:
+        ; Reached end (NULL or SPACE) after parsing potentially valid digits
+        TST     digCount        ; Were any digits actually parsed?
+        BEQ     pdvError        ; If count is 0 (no digits found), it's an error
+        ; Valid decimal number parsed (1 or more digits)
+        STY     tempPtr         ; Update caller's pointer to point after the parsed digits
+        LDD     tempWord        ; Load the final result into D
+        SEC                     ; Set Carry flag for success
+        RTS
+
+pdvOverflow_Pop:
+        PULA                    ; *** Pop the digit value off stack before error exit ***
+pdvOverflow:
+        ; Overflow detected during multiplication or final add
+pdvError:
+        ; Common error exit (invalid char, no digits, overflow)
+        CLC                     ; Clear Carry flag for error
+        LDD     #0              ; Return 0 in D (optional)
+        RTS
+        
 ***********************************************************************
 * isHexDigit: Check if A contains a valid hex digit
 * Input:      A - ASCII character to check
@@ -955,75 +774,66 @@ pHex2       JSR         putchar
 
 ***********************************************************************
 * printWordHex: Print a 16-bit word in hexadecimal format
-* Input:      D - word to print
+* Input:      D - word to print (A:B)
 * Output:     Terminal display
-* Registers:  A, B modified
+* Registers:  A, B modified (uses PSHB/PULB internally)
 ***********************************************************************
 printWordHex
-            PSHA                    ; Save high byte
-            JSR         printByteHex ; Print high byte
-            
-            TBA                     ; Transfer B (low byte) to A
-            JSR         printByteHex ; Print low byte
-            
-            PULA                    ; Restore original high byte
-            RTS
-
+        PSHB            ; Save original Low Byte (B) from D register onto stack
+        ; A still holds the original High Byte from D register
+        JSR printByteHex ; Print High Byte (using A). This call modifies A and B.
+        PULB            ; Restore original Low Byte from stack into B.
+        TBA             ; Transfer original Low Byte (now in B) into A.
+        JSR printByteHex ; Print original Low Byte (now in A). Modifies A, B again.
+        RTS             ; Return. Stack is balanced.
 ***********************************************************************
 * printWordDec: Print a 16-bit word in decimal format
 * Input:      D - word to print
 * Output:     Terminal display
-* Registers:  All modified
+* Registers:  A, B, X, Y modified (PSHX/Y, PULX/Y used)
 ***********************************************************************
 printWordDec
-            ; Simplified and corrected version for 16-bit unsigned values
-            PSHX                    ; Save X
-            PSHY                    ; Save Y
-            
-            ; Store the original number
-            STD         tempWord    ; Save the value
-            
-            ; Special case for zero
-            CPD         #0
-            BNE         pwdNonZero
-            
-            LDAA        #'0'        ; Load ASCII '0'
-            JSR         putchar
-            BRA         pwdDone
-            
-pwdNonZero  
-            ; Format: We'll convert to string by repeated division by 10
-            ; We'll push each digit onto the stack then pop them all to print
-            LDAB        #0          ; Initialize digit counter
-            
-pwdLoop     
-            ; Divide by 10: D / 10
-            TFR         D,Y         ; Y = D (the value to divide)
-            LDD         #10         ; Divisor = 10
-            IDIV                    ; Y/D -> Y=quotient, D=remainder
-            TFR         Y,X         ; X = quotient
-            
-            ; Convert remainder to ASCII and push onto stack
-            ADDB        #'0'        ; Convert to ASCII
-            PSHB                    ; Push onto stack
-            INCB                    ; Increment digit counter
-            XGDX                    ; D = quotient
-            
-            ; If quotient is zero, we're done
-            CPD         #0
-            BNE         pwdLoop     ; If not zero, continue
-            
-            ; Print digits in reverse order (pop from stack)
-pwdPrint    PULB                    ; Get digit from stack
-            TBA                     ; Transfer to A
-            JSR         putchar     ; Print it
-            DECB                    ; Decrement counter
-            BNE         pwdPrint    ; Continue until all digits printed
-            
-pwdDone     PULY                    ; Restore Y
-            PULX                    ; Restore X
-            LDD         tempWord    ; Restore original value
-            RTS
+        PSHX                    ; Save X
+        PSHY                    ; Save Y
+
+        CLR     digCount        ; Use memory variable for count, clear it first
+
+        ; Special case for zero
+        CPD     #0
+        BNE     pwdNZ_v9
+        LDAA    #'0'
+        JSR     putchar
+        BRA     pwdDone_v9      ; Go directly to cleanup/RTS
+
+pwdNZ_v9
+        ; --- Division loop ---
+pwdDivLoop_v9
+        LDX     #10             ; X = Divisor = 10
+        ; D = number to divide
+        IDIV                    ; D / X => X = Quotient, D = Remainder
+        ; Remainder (0-9) is now in D (specifically B)
+        PSHB                    ; Push Remainder (B) onto stack
+        INC     digCount        ; Increment counter in memory
+        TFR     X,D             ; D = Quotient
+        CPD     #0
+        BNE     pwdDivLoop_v9   ; Loop if quotient != 0
+
+        ; --- Print loop ---
+        ; digCount holds the count of digits pushed.
+pwdPrintLoop_v9
+        LDAA    digCount        ; Load count into A
+        BEQ     pwdDone_v9      ; Branch if count is zero (finished)
+        DEC     digCount        ; Decrement count in memory *before* popping/printing
+        PULB                    ; Pop digit (Remainder 0-9) into B
+        ADDB    #'0'            ; Convert popped digit to ASCII IN B
+        TBA                     ; Transfer ASCII char from B to A
+        JSR     putchar         ; Print the digit
+        BRA     pwdPrintLoop_v9 ; Loop back to check count again
+
+pwdDone_v9
+        PULY                    ; Restore original Y
+        PULX                    ; Restore original X
+        RTS
 
 ***********************************************************************
 * typewriter: Simple typewriter program
