@@ -65,20 +65,19 @@ MAX_CMD_LEN EQU         80          ; Maximum command length
 ***********************************************************************
 * Data Section - Variables and Strings
 ***********************************************************************
-            ORG         $3800       ; Start of data section
+            ORG         $3000       ; Start of data section - CHANGED FROM $3800 to $3000
 
 cmdBuffer   DS.B        MAX_CMD_LEN ; Command input buffer
 cmdLength   DS.B        1           ; Length of command
-address     DS.W        1           ; Memory address for commands
+address     DS.W        1           ; Address for S/W commands
 dataValue   DS.W        1           ; Data value for W command
-;tempByte    DS.B        1           ; Temporary storage
-tempPtr     DS.W        1
-isHexData   DS.B        1           ; Flag for hex/decimal data format
-decBuffer   DS.B        6           ; Buffer for decimal conversion
-hexValid    DS.B        1           ; Flag to track if all chars are valid hex
+tempPtr     DS.W        1           ; Temporary pointer for parsing
+tempWord    DS.W        1           ; Temporary word for calculations
+hexValid    DS.B        1           ; Temporary byte for hex validation
 digCount    DS.B        1           ; Digit counter for parsing
-tempWord    DS.W        1           ; Temporary word storage
-debugFlag   DS.B        1           ; Flag for debugging
+inLDMode    DS.B        1           ; Flag to indicate if in LD mode (1=yes, 0=no)
+debugFlag   DS.B        1           ; Flag for debug mode
+decBuffer   DS.B        6           ; Buffer for decimal conversion
 
 ***********************************************************************
 * Program Section
@@ -94,17 +93,42 @@ welcome3    DC.B        'and hit ', $27, 'Enter', $27, '.', CR, LF, CR, LF, NULL
 example1    DC.B        '>S$3000                  ;to see the memory content at $3000 and $3001', CR, LF, NULL
 example2    DC.B        '>W$3003 $126A            ;to write $126A to memory locations $3003 and $3004', CR, LF, NULL
 example3    DC.B        '>W$3003 4714             ;to write $126A to memory location $3003 and $3004', CR, LF, NULL
-example4    DC.B        '>QUIT                    ;quit the Simple Memory Access Program', CR, LF, NULL
+example4    DC.B        '>MD$3000,$10             ;display 16 bytes starting from memory address $3000', CR, LF, NULL
+example5    DC.B        '>LD$3050                 ;to load hex data to memory starting at $3050', CR, LF, NULL
+example6    DC.B        '>GO$3050                 ;to execute program at memory location $3050', CR, LF, NULL
+example7    DC.B        '>QUIT                    ;quit the Simple Memory Access Program', CR, LF, NULL
 msgInvCmd   DC.B        'Invalid command. Use one of the following:', CR, LF
             DC.B        ' S$xxxx   - Show memory contents at address xxxx', CR, LF
             DC.B        ' W$xxxx v - Write value v to address xxxx (v can be decimal or $hex)', CR, LF
+            DC.B        ' MD$xxxx,$yyyy - Display yyyy bytes of memory from xxxx (exactly as shown)', CR, LF
+            DC.B        ' LD$xxxx - Load data to memory starting at xxxx', CR, LF
+            DC.B        ' GO$xxxx - Execute program at address xxxx', CR, LF
             DC.B        ' QUIT     - Exit to typewriter mode', CR, LF, NULL
 msgInvAddr  DC.B        'invalid input, address', CR, LF, NULL
 msgInvData  DC.B        'invalid input, data', CR, LF, NULL
 msgQuit     DC.B        'Type-writing now, hit any keys:', CR, LF, NULL
 spaceArrow  DC.B        ' => ', NULL
 
-; Add a debug print macro to help diagnose issues
+; Add new message constants
+msgNotImplemented DC.B 'Command recognized but not yet implemented.', CR, LF, NULL
+msgMDHeader1  DC.B 'Memory display from $', NULL
+msgMDHeader2  DC.B ' to $', NULL
+msgMDHeader3  DC.B ' (', NULL
+msgMDHeader4  DC.B ' bytes)', CR, LF, NULL
+msgMDError    DC.B 'Error: Invalid MD command format. Use MD$xxxx,$yyyy (where xxxx = start address, yyyy = byte count)', CR, LF, NULL
+msgMDComma    DC.B 'Error: Missing comma in MD command', CR, LF, NULL
+msgMDRange    DC.B 'Error: Invalid range for MD command', CR, LF, NULL
+msgLDPrompt   DC.B 'Enter hex data (32 chars per line, empty line to end):', CR, LF, NULL
+msgLDError    DC.B 'Error: Invalid LD command format. Use LD$xxxx', CR, LF, NULL
+msgLDComplete DC.B 'Data load complete.', CR, LF, NULL
+msgLDInvalid  DC.B 'Error: Invalid hex data. Must be 32 hex characters.', CR, LF, NULL
+msgLDSuccess  DC.B 'Loaded ', NULL
+msgLDSuccess2 DC.B ' bytes to memory.', CR, LF, NULL
+msgLDCommand  DC.B '-- Processing command while in LD mode --', CR, LF, NULL
+msgGOError    DC.B 'Error: Invalid GO command format. Use GO$xxxx', CR, LF, NULL
+msgGOExecute  DC.B 'Executing program at $', NULL
+
+; Add debug print macro to help diagnose issues
 msgDebug    DC.B        'Debug: Value=', NULL
 
 printDebug  
@@ -149,6 +173,9 @@ clearVars   CLR         0,X         ; Clear this variable
             CPX         Y           ; Reached the end?
             BLS         clearVars   ; If not, continue clearing
             
+            ; Initialize specific variables
+            CLR         inLDMode    ; Ensure we start in normal mode, not LD mode
+            
             ; Show welcome message and instructions
             LDX         #welcome1
             JSR         printmsg
@@ -166,6 +193,12 @@ clearVars   CLR         0,X         ; Clear this variable
             JSR         printmsg
             LDX         #example4
             JSR         printmsg
+            LDX         #example5
+            JSR         printmsg
+            LDX         #example6
+            JSR         printmsg
+            LDX         #example7
+            JSR         printmsg
 
 mainLoop    ; Reset the command length for next command
             CLR         cmdLength
@@ -177,13 +210,13 @@ mainLoop    ; Reset the command length for next command
             ; Get a new command
             JSR         getCommand  ; Get command from user
             TST         cmdLength   ; Check if command received
-            BEQ         mainLoop    ; If empty command, restart
+            LBEQ        mainLoop    ; If empty command, restart
             
             ; Process the command
             JSR         processCmd  ; Process the command
             
             ; Always return to the main loop
-            BRA         mainLoop    ; Return to main loop
+            LBRA        mainLoop    ; Return to main loop
 
 ***********************************************************************
 * getCommand: Get command from user via serial input
@@ -203,7 +236,7 @@ getCommand
 gcClearLoop CLR         0,X         ; Clear this byte
             INX                     ; Next byte
             DEY                     ; Decrement counter
-            BNE         gcClearLoop ; If not done, continue
+            LBNE        gcClearLoop ; If not done, continue
             
             ; Now get the command
             LDY         #cmdBuffer  ; Reset to start of buffer
@@ -240,6 +273,17 @@ gcDone      CLR         0,Y         ; Null-terminate buffer
 processCmd  
             LDX         #cmdBuffer  ; Point to command
             
+            ; Check if we're in LD mode but this isn't being called from temporaryCommandMode
+            ; If so, we should process the input as hex data for LD, not as a command
+            LDAA        inLDMode
+            BEQ         normalCommandMode  ; If not in LD mode, process normally
+            
+            ; If we're here, we're in LD mode but had a JSR directly to processCmd
+            ; This would happen during loadMemoryBlock when a line doesn't start with a command
+            ; Return to calling function (loadMemoryBlock) to process as data
+            RTS
+            
+normalCommandMode:
             ; Check command length first
             LDAA        cmdLength
             CMPA        #1          ; At least 1 character needed
@@ -258,28 +302,37 @@ processCmd
             
 pcNotLower  ; Now it's uppercase if it was lowercase
             CMPA        #'S'        ; Is it S command?
-            BEQ         procShowCmd
+            LBEQ        procShowCmd
             
             CMPA        #'W'        ; Is it W command?
-            LBEQ         procWriteCmd
+            LBEQ        procWriteCmd
+            
+            CMPA        #'M'        ; Is it MD command?
+            LBEQ        checkMDCmd
+            
+            CMPA        #'L'        ; Is it LD command?
+            LBEQ        checkLDCmd
+            
+            CMPA        #'G'        ; Is it GO command?
+            LBEQ        checkGOCmd
             
             CMPA        #'Q'        ; Is it Q?
-            BNE         invalidCmd  ; If not S, W, or Q, invalid command
+            LBNE        invalidCmd  ; If not a recognized command, invalid
             
             ; Check if command is "QUIT"
             LDAB        cmdLength
             CMPB        #4          ; Must be exactly 4 chars for QUIT
-            BNE         invalidCmd
+            LBNE        invalidCmd
             
             LDAA        1,X         ; Second character
             CMPA        #'U'
-            BNE         invalidCmd
+            LBNE        invalidCmd
             LDAA        2,X         ; Third character
             CMPA        #'I'
-            BNE         invalidCmd
+            LBNE        invalidCmd
             LDAA        3,X         ; Fourth character
             CMPA        #'T'
-            BNE         invalidCmd
+            LBNE        invalidCmd
             
 doQuit      ; QUIT command - go to typewriter mode
             LDX         #msgQuit
@@ -404,9 +457,214 @@ invalidData
         JSR     printmsg
         RTS
 
+checkMDCmd   ; Check if command is MD (Memory Display)
+            LDAA        cmdLength
+            CMPA        #2          ; Must be at least 2 chars for MD
+            LBLO        invalidCmd
+            
+            LDAA        1,X         ; Second character
+            CMPA        #'D'
+            LBNE        invalidCmd
+            
+            ; Check if format is MD$xxxx,yyyy
+            LDAA        cmdLength
+            CMPA        #8          ; Need at least MD$x,y
+            LBLO        invalidMD
+            
+            LDAA        2,X         ; Check for $ after MD
+            CMPA        #DOLLAR
+            LBNE        invalidMD
+            
+            ; Now X points to 'M' in "MD$xxxx,yyyy"
+            JSR         procMDCmd
+            RTS
+
+procMDCmd   ; Process the MD command - MD$xxxx,yyyy
+            ; X points to the start of the command
+            LEAX        3,X         ; Skip "MD$" to get to start address
+            STX         tempPtr     ; Save pointer for address parsing
+            
+            ; Parse the starting address
+            JSR         parseHexValue   ; Get starting address in D
+            LBCC        invalidMD       ; If not valid hex, error
+            
+            STD         address         ; Store starting address
+            
+            ; Find the comma separator
+            LDY         tempPtr         ; Get updated pointer after parseHexValue
+            
+findMDComma LDAA        0,Y             ; Get character
+            CMPA        #NULL           ; End of string?
+            LBEQ        invalidMDComma  ; No comma found
+            CMPA        #','            ; Is it a comma?
+            LBEQ        foundMDComma    ; Yes, found the separator
+            INY                         ; Next character
+            LBRA        findMDComma     ; Continue
+            
+invalidMDComma
+            LDX         #msgMDComma     ; Error message
+            JSR         printmsg
+            RTS
+            
+foundMDComma
+            ; Found comma, now parse the count/size
+            INY                         ; Skip comma
+            
+            ; Skip any spaces after the comma
+skipMDSpaces
+            LDAA        0,Y             ; Get character after comma
+            CMPA        #SPACE          ; Is it a space?
+            LBNE        parseMDCount    ; If not a space, start parsing count
+            INY                         ; Skip the space
+            LBRA        skipMDSpaces    ; Check for more spaces
+            
+parseMDCount
+            ; Check if the value starts with $ (hex prefix)
+            CMPA        #DOLLAR
+            LBNE        invalidMD       ; Must be hex with $ prefix
+            INY                         ; Skip the $ character
+            
+            STY         tempPtr         ; Save pointer for count parsing
+            
+            ; Parse the count value
+            JSR         parseHexValue   ; Get size/count in D
+            LBCC        invalidMD       ; If not valid hex, error
+            
+            STD         dataValue       ; Store count in dataValue
+            
+            ; Calculate end address (start + count - 1)
+            LDD         address         ; Get starting address
+            ADDD        dataValue       ; Add count
+            SUBD        #1              ; Subtract 1 for end address
+            STD         tempWord        ; Store end address temporarily
+            
+            ; Validate address range
+            CPD         #SAFE_MEM_END
+            LBHI        invalidMDRange  ; End beyond memory limit
+            
+            ; Now display memory in 16-byte rows - without the verbose header
+            JSR         displayMemoryBlock
+            RTS
+            
+invalidMD   LDX         #msgMDError     ; Invalid MD command format
+            JSR         printmsg
+            RTS
+            
+invalidMDRange
+            LDX         #msgMDRange     ; Invalid range
+            JSR         printmsg
+            RTS
+
+checkLDCmd   ; Check if command is LD (Load Data)
+            LDAA        cmdLength
+            CMPA        #2          ; Must be at least 2 chars for LD
+            LBLO        invalidCmd
+            
+            LDAA        1,X         ; Second character
+            CMPA        #'D'
+            LBNE        invalidCmd
+            
+            ; Check if format is LD$xxxx
+            LDAA        cmdLength
+            CMPA        #6          ; Need at least LD$x
+            LBLO        invalidLD
+            
+            LDAA        2,X         ; Check for $ after LD
+            CMPA        #DOLLAR
+            LBNE        invalidLD
+            
+            ; Now X points to 'L' in "LD$xxxx"
+            JSR         procLDCmd
+            RTS
+
+procLDCmd   ; Process the LD command - load data to memory
+            ; X points to the start of the command
+            LEAX        3,X         ; Skip "LD$" to get to start address
+            STX         tempPtr     ; Save pointer for address parsing
+            
+            ; Parse the starting address
+            JSR         parseHexValue   ; Get starting address in D
+            LBCC        invalidLD       ; If not valid hex, error
+            
+            STD         address         ; Store starting address
+            
+            ; Display prompt for data entry
+            LDX         #msgLDPrompt
+            JSR         printmsg
+            
+            ; Initialize data load variables
+            CLR         dataValue       ; Reset byte counter
+            CLR         dataValue+1     ; (16-bit counter)
+            
+            ; Call the data load function
+            JSR         loadMemoryBlock
+            
+            ; Show completion message with byte count (already displayed in loadMemoryBlock)
+            
+            ; Return to main command processing
+            RTS
+
+invalidLD   LDX         #msgLDError     ; Invalid LD command format
+            JSR         printmsg
+            RTS
+
+checkGOCmd   ; Check if command is GO (Execute program)
+            LDAA        cmdLength
+            CMPA        #2          ; Must be at least 2 chars for GO
+            LBLO        invalidCmd
+            
+            LDAA        1,X         ; Second character
+            CMPA        #'O'
+            LBNE        invalidCmd
+            
+            ; Check if format is GO$xxxx
+            LDAA        cmdLength
+            CMPA        #6          ; Need at least GO$x
+            LBLO        invalidGO
+            
+            LDAA        2,X         ; Check for $ after GO
+            CMPA        #DOLLAR
+            LBNE        invalidGO
+            
+            ; Now X points to 'G' in "GO$xxxx"
+            JSR         procGOCmd
+            RTS
+
+procGOCmd   ; Process the GO command - execute program at address
+            ; X points to the start of the command
+            LEAX        3,X         ; Skip "GO$" to get to start address
+            STX         tempPtr     ; Save pointer for address parsing
+            
+            ; Parse the target address
+            JSR         parseHexValue   ; Get address in D
+            LBCC        invalidGO       ; If not valid hex, error
+            
+            STD         address         ; Store target address
+            
+            ; Display execute message
+            LDX         #msgGOExecute
+            JSR         printmsg
+            
+            LDD         address
+            JSR         printWordHex    ; Print address
+            
+            LDX         #msgLF
+            JSR         printmsg
+            
+            ; Execute program by jumping to target address
+            LDX         address         ; Get target address in X
+            JSR         0,X             ; Execute program (JSR to preserve return)
+            
+            ; Program returned, show prompt again
+            RTS                         ; Return to main loop
+            
+invalidGO   LDX         #msgGOError     ; Invalid GO command format
+            JSR         printmsg
+            RTS
+
 ***********************************************************************
 * parseHexValue  –  convert up to four hex digits to a 16-bit value
-*   entry :  tempByte  → pointer to first digit (‘0’–‘9’, ‘A’–‘F’, ‘a’–‘f’)
+*   entry :  tempByte  → pointer to first digit ('0'–'9', 'A'–'F', 'a'–'f')
 *   exit  :  D         = value (0-FFFFh)
 *            tempByte  → first char that is not a hex digit
 *            C-flag    = 1 success, 0 syntax error / > 4 digits
@@ -592,28 +850,6 @@ notHexDigit CLC                     ; Clear carry - not a hex digit
             
 validHexDigit
             SEC                     ; Set carry - valid hex digit
-            PULA                    ; Restore A
-            RTS
-
-***********************************************************************
-* isDecDigit: Check if A contains a valid decimal digit
-* Input:      A - ASCII character to check
-* Output:     Carry flag - set if valid decimal digit, clear if not
-* Registers:  A preserved
-***********************************************************************
-isDecDigit  PSHA                    ; Save A
-            
-            CMPA        #'0'
-            BLO         notDecDigit
-            CMPA        #'9'
-            BLS         validDecDigit
-            
-notDecDigit CLC                     ; Clear carry - not a decimal digit
-            PULA                    ; Restore A
-            RTS
-            
-validDecDigit
-            SEC                     ; Set carry - valid decimal digit
             PULA                    ; Restore A
             RTS
 
@@ -929,5 +1165,325 @@ hctvNotUpper
             
 hctvInvalid  
             LDAA        #$FF         ; Invalid character
+            RTS
+
+***********************************************************************
+* isDecDigit: Check if A contains a valid decimal digit
+* Input:      A - ASCII character to check
+* Output:     Carry flag - set if valid decimal digit, clear if not
+* Registers:  A preserved
+***********************************************************************
+isDecDigit  PSHA                    ; Save A
+            
+            CMPA        #'0'
+            BLO         notDecDigit
+            CMPA        #'9'
+            BLS         validDecDigit
+            
+notDecDigit CLC                     ; Clear carry - not a decimal digit
+            PULA                    ; Restore A
+            RTS
+            
+validDecDigit
+            SEC                     ; Set carry - valid decimal digit
+            PULA                    ; Restore A
+            RTS
+
+***********************************************************************
+* displayMemoryBlock: Display a block of memory in 16-byte rows
+* Input:      address - starting address
+*             dataValue - number of bytes to display
+*             tempWord - ending address
+* Output:     Terminal display
+* Registers:  All modified
+***********************************************************************
+displayMemoryBlock
+            ; Calculate number of rows to display
+            LDD         dataValue
+            ADDD        #15            ; Round up to include partial row
+            LSRD                       ; Divide by 16 (shift right 4 times)
+            LSRD
+            LSRD
+            LSRD
+            STD         digCount       ; Store row count in digCount
+            
+            ; Ensure at least one row
+            LDD         digCount
+            CPD         #0
+            LBNE        startDisplay   ; If not zero, continue
+            LDD         #1             ; Otherwise set to 1 row
+            STD         digCount
+            
+startDisplay
+            ; Calculate end address for display
+            LDD         address        ; Start address
+            ADDD        dataValue      ; Add count
+            SUBD        #1             ; Subtract 1 for end address
+            STD         tempWord       ; Store end address
+            
+            ; Start with the memory address aligned to 16-byte boundary
+            LDD         address        ; Start address
+            ANDB        #$F0           ; Clear low 4 bits (16-byte alignment)
+            STD         tempPtr        ; Store aligned address
+            
+displayRowLoop
+            ; Print row address
+            LDAA        #'0'           ; Add leading zero for aesthetics
+            JSR         putchar
+            
+            LDD         tempPtr
+            JSR         printWordHex   ; Print current row address
+            LDAA        #SPACE
+            JSR         putchar
+            
+            ; Print 16 bytes in hex
+            LDY         #16            ; Count 16 bytes per row
+            LDX         tempPtr        ; X points to current byte
+            
+displayByteLoop
+            ; Get and display the byte
+            LDAA        0,X            ; Get byte at address X
+            JSR         printByteHex   ; Print in hex
+            
+            ; Print a space after each byte
+            LDAA        #SPACE
+            JSR         putchar
+            
+            ; Move to next byte
+            INX                      ; Next byte in memory
+            DEY                      ; Decrement counter
+            LBNE        displayByteLoop ; Continue until row done
+            
+            ; Print dots and command indicator at end of row
+            LDAA        #'.'
+            LDAB        #5
+dotLoop     JSR         putchar
+            DECB
+            LBNE        dotLoop
+            
+            ; Check if in first row to show command
+            LDD         digCount
+            CPD         #1
+            LBNE        skipCmd
+            
+            ; Show command on first row only
+            LDAA        #'M'
+            JSR         putchar
+            LDAA        #'D'
+            JSR         putchar
+            LDAA        #'$'
+            JSR         putchar
+            
+            ; Show the starting address
+            LDD         address
+            JSR         printWordHex
+            
+            LDAA        #','
+            JSR         putchar
+            LDAA        #'$'
+            JSR         putchar
+            
+            ; Show byte count
+            LDD         dataValue
+            JSR         printWordHex
+            
+skipCmd     ; End of row, print newline
+            LDX         #msgLF
+            JSR         printmsg
+            
+            ; Move to next row
+            LDD         tempPtr
+            ADDD        #16            ; Add 16 to move to next row
+            STD         tempPtr
+            
+            ; Decrement row counter
+            LDD         digCount
+            SUBD        #1
+            STD         digCount
+            
+            ; Continue if not done
+            LDD         digCount
+            CPD         #0
+            LBNE        displayRowLoop
+            
+            RTS
+
+***********************************************************************
+* loadMemoryBlock: Load data from serial input to memory
+* Input:      address - starting address for data
+* Output:     dataValue - number of bytes loaded
+* Registers:  All modified
+***********************************************************************
+loadMemoryBlock
+            ; Set up memory pointer
+            LDY         address     ; Y = current memory pointer
+            
+            ; Set LD mode flag to indicate we're in LD mode
+            LDAA        #1
+            STAA        inLDMode
+            
+loadLineLoop
+            ; Show prompt for next line
+            LDX         #msgPrompt
+            JSR         printmsg
+            
+            ; Clear command buffer before getting input
+            LDX         #cmdBuffer
+            LDY         #MAX_CMD_LEN
+            
+ldClearLoop CLR         0,X
+            INX
+            DEY
+            LBNE        ldClearLoop
+            
+            ; Get input line
+            JSR         getCommand  ; Get line into cmdBuffer
+            
+            ; Check if empty line (just Enter pressed)
+            LDAA        cmdLength
+            LBEQ        loadComplete ; If empty, we're done
+            
+            ; Check if line starts with S, W, M, G, Q, L (potential command)
+            ; If so, temporarily leave LD mode and process as normal command
+            LDAA        0,X         ; Get first character
+            CMPA        #'S'
+            LBEQ        temporaryCommandMode
+            CMPA        #'s'
+            LBEQ        temporaryCommandMode
+            CMPA        #'W'
+            LBEQ        temporaryCommandMode
+            CMPA        #'w'
+            LBEQ        temporaryCommandMode
+            CMPA        #'M'
+            LBEQ        temporaryCommandMode
+            CMPA        #'m'
+            LBEQ        temporaryCommandMode
+            CMPA        #'G'
+            LBEQ        temporaryCommandMode
+            CMPA        #'g'
+            LBEQ        temporaryCommandMode
+            CMPA        #'Q'
+            LBEQ        temporaryCommandMode
+            CMPA        #'q'
+            LBEQ        temporaryCommandMode
+            CMPA        #'L'
+            LBEQ        temporaryCommandMode
+            CMPA        #'l'
+            LBEQ        temporaryCommandMode
+            
+            ; Not a command, validate as hex data
+            ; Check if line has exactly 32 hex chars (16 bytes)
+            LDAA        cmdLength
+            CMPA        #32
+            LBNE        loadInvalidLine
+            
+            ; Process 32 hex characters (16 bytes)
+            LDX         #cmdBuffer  ; X points to input line
+            LDAB        #16         ; Count 16 bytes to process
+            
+loadByteLoop
+            ; Process two hex characters to form one byte
+            
+            ; First hex character
+            LDAA        0,X         ; Get first char
+            JSR         hexCharToVal ; Convert to value
+            CMPA        #$FF
+            LBEQ        loadInvalidLine ; Invalid hex
+            
+            ; Shift to high nibble
+            ASLA                    ; Shift left 4 times (A * 16)
+            ASLA
+            ASLA
+            ASLA
+            STAA        hexValid    ; Store high nibble temporarily
+            
+            ; Second hex character
+            LDAA        1,X         ; Get second char
+            JSR         hexCharToVal ; Convert to value
+            CMPA        #$FF
+            LBEQ        loadInvalidLine ; Invalid hex
+            
+            ; Combine with high nibble
+            ORAA        hexValid    ; Combine with high nibble
+            
+            ; Store byte to memory
+            STAA        0,Y         ; Store byte to memory
+            INY                     ; Next memory location
+            
+            ; Update counter
+            LDD         dataValue
+            ADDD        #1          ; Increment byte counter
+            STD         dataValue
+            
+            ; Move to next pair of hex chars
+            INX                     ; Skip to next character
+            INX                     ; Skip to next character
+            
+            ; Continue until done
+            DECB
+            LBNE        loadByteLoop
+            
+            ; Echo newline after line processed
+            LDX         #msgLF
+            JSR         printmsg
+            
+            ; Continue with next line
+            LBRA        loadLineLoop
+            
+temporaryCommandMode
+            ; We detected a potential command while in LD mode
+            ; Temporarily exit LD mode, process the command normally, then return
+            CLR         inLDMode           ; Temporarily exit LD mode
+            
+            ; Display message that we're processing a command while in LD mode
+            LDX         #msgLDCommand
+            JSR         printmsg
+            
+            ; Save the current LD state
+            PSHX                           ; Save X register
+            PSHY                           ; Save Y register
+            
+            ; Process the command through normal command processor
+            JSR         processCmd         ; Process as a normal command
+            
+            ; Restore LD state
+            PULY                           ; Restore Y register
+            PULX                           ; Restore X register
+            
+            ; Re-enter LD mode and continue
+            LDAA        #1
+            STAA        inLDMode
+            
+            ; Remind the user they're still in LD mode
+            LDX         #msgLDPrompt
+            JSR         printmsg
+            
+            LBRA        loadLineLoop       ; Back to LD prompt
+            
+loadInvalidLine
+            ; Invalid hex data in input line
+            LDX         #msgLDInvalid
+            JSR         printmsg
+            LBRA        loadLineLoop ; Try again for next line
+            
+loadComplete
+            ; Clear LD mode flag when we're done
+            CLR         inLDMode
+            
+            ; Loading complete, display message
+            LDX         #msgLDComplete
+            JSR         printmsg
+            
+            ; Show how many bytes were loaded
+            LDX         #msgLDSuccess
+            JSR         printmsg
+            
+            LDD         dataValue
+            JSR         printWordDec
+            
+            LDX         #msgLDSuccess2
+            JSR         printmsg
+            
+            ; Return to main command processing
             RTS
 

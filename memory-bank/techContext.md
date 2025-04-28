@@ -1,7 +1,7 @@
 # Technical Context
 
 ## Technologies Used
-This project is implemented for the HCS12 microcontroller platform using assembly language. It builds upon previous homework assignments in the CMPEN 472 course, particularly the memory access functionality from Homework 6.
+This project is implemented for the HCS12 microcontroller platform using assembly language. It builds upon previous homework assignments in the CMPEN 472 course, extending the memory access functionality from Homework 6 into a comprehensive MONITOR program.
 
 ## Development Environment
 - CodeWarrior development software
@@ -33,13 +33,22 @@ This project is implemented for the HCS12 microcontroller platform using assembl
 2. Memory Organization:
    - Variables: $3000-$30FF
    - Program code: $3100-$xxxx
-   - Safe memory range: $3000-$3800
+   - Safe memory range: entire addressable range
+   - Memory display: 16-byte aligned boundaries
 
 3. Register Usage:
    - A: Command processing, calculations
    - B: Bit manipulation, counters
    - X,Y: Memory pointers and access
    - Z: Not used
+
+4. Command Structure:
+   - S$xxxx: Show memory word in multiple formats
+   - W$xxxx yyyy: Write data to memory
+   - MD$xxxx $yyyy: Display memory block
+   - LD$xxxx $yyyy: Load data block to memory
+   - GO$xxxx: Execute program
+   - QUIT: Exit program
 
 ## Dependencies
 1. Previous Project Code:
@@ -50,6 +59,31 @@ This project is implemented for the HCS12 microcontroller platform using assembl
    - HCS12 instruction set
    - SCI communication protocol
    - Terminal I/O capabilities
+
+## Technical Implementation Requirements
+1. Memory Display (MD command):
+   - Display memory in 16-byte rows
+   - Format: Address followed by 16 byte values in hex
+   - Always start at 16-byte boundary that occurs before specified address
+   - Always end at 16-byte boundary that occurs after specified end address
+
+2. Data Loading (LD command):
+   - Accept address and block size
+   - Process 16-byte lines of hex data
+   - Store in specified memory locations
+   - Support multiple lines of input
+
+3. Binary/Decimal/Hex Conversions:
+   - Convert values between formats
+   - Display memory word as:
+     - Binary: %xxxxxxxxxxxxxxxx
+     - Hex: $xxxx
+     - Decimal: xxxxx
+
+4. Program Execution (GO command):
+   - Validate address
+   - Transfer program control to specified address
+   - Ensure safe execution
 
 ## Build Process
 1. Assembly:
@@ -66,18 +100,22 @@ This project is implemented for the HCS12 microcontroller platform using assembl
    - Serial output for status messages
    - Error reporting via terminal
    - Memory content verification
+   - Block memory display for inspection
 
 2. Testing Methods:
    - Command syntax validation
    - Memory access verification
    - Error handling checks
    - Boundary condition testing
+   - Block memory operations validation
+   - Test program execution (Choi example)
 
 ## Technical Constraints
-1. Memory Limitations:
-   - Safe memory range: $3000-$3800
-   - Variable space: 256 bytes ($30FF - $3000)
-   - Maximum command length: 16 characters
+1. Memory Organization:
+   - Program must start at $3100
+   - Data must start at $3000
+   - Support memory operations across entire addressable range
+   - Memory display aligned to 16-byte boundaries
 
 2. Hardware Constraints:
    - HCS12 processor capabilities
@@ -88,5 +126,15 @@ This project is implemented for the HCS12 microcontroller platform using assembl
    - Efficient memory access
    - Responsive command processing
    - Reliable error handling
+   - Efficient block memory operations
 
-*Note: This technical context is based on the Homework 6 implementation and will be updated with any additional requirements from Homework 12.* 
+4. Display Format Requirements:
+   - Binary: %xxxxxxxxxxxxxxxx (16 bits)
+   - Hex: $xxxx (4 digits)
+   - Decimal: xxxxx (no leading zeros)
+   - Memory display: rows of 16 bytes
+
+## Submission Requirements
+- Copy 'main.asm' to 'cmpen472hw12_mbatia.asm'
+- Submit the .asm file (not zipped) via CANVAS
+- Due date: April 25, 2025 at 11:30pm 

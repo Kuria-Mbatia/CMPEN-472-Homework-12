@@ -5,18 +5,22 @@
    - CMPEN 472 is an embedded systems course at Penn State
    - Projects focus on HCS12 microcontroller programming
    - Assignments build upon previous work
+   - Homework 12 extends Homework 6 with additional commands
 
 2. Code Structure:
    - Assembly language implementation
    - Memory-mapped I/O
    - Register-based operations
    - Serial communication protocols
+   - Command parsing and execution
+   - Multi-format data display
 
 3. Documentation Standards:
    - Detailed header comments required
    - Register usage documentation
    - Memory map specifications
    - Algorithm descriptions
+   - Command syntax explanations
 
 ## Technical Setup
 1. Development Environment:
@@ -30,72 +34,176 @@
    - Project/ contains current work
    - Memory bank documentation in memory-bank/
 
+## Code Review Insights
+1. Current Implementation:
+   - Existing code uses a clean, modular structure
+   - Command processing follows a predictable pattern
+   - S command already displays in binary, hex, and decimal
+   - W command already accepts both hex and decimal inputs
+   - Error handling is robust and consistent
+   - Utility functions exist for all needed operations
+   - Data section currently at $3800 needs moving to $3000
+
+2. Command Processing Pattern:
+   - Command detection in processCmd
+   - Dedicated handler for each command (e.g., procShowCmd, procWriteCmd)
+   - Command validation before processing
+   - Address parsing via parseHexValue
+   - Data parsing via parseHexValue or parseDecValue
+   - Execution via dedicated functions (e.g., showMemory, writeMemory)
+
+3. Memory Display Pattern:
+   - Address printed first
+   - Data format clearly labeled (%, $)
+   - Consistent spacing between formats
+   - Multiple format displays in one function
+
 ## Critical Implementation Paths
 1. Memory Access:
-   - Safe memory range: $3000-$3800
-   - Variables: $3000-$30FF
+   - Safe memory range: entire addressable range
+   - Variables: $3000-$30FF (need to move from $3800)
    - Program code: $3100-$xxxx
+   - Block memory operations (MD, LD commands)
+   - 16-byte alignment for memory display
 
 2. Command Processing:
    - Parse input from SCI
    - Validate commands and parameters
    - Execute memory operations
    - Provide user feedback
+   - Support for multiple command formats
+   - Block data processing
 
 3. Error Handling:
    - Address validation
    - Command syntax checking
    - Memory safety enforcement
    - User feedback via terminal
+   - Invalid input handling
+   - Program stability on error
+
+4. Data Conversion:
+   - Binary/hex/decimal display formats
+   - Parsing hex and decimal inputs
+   - Memory block formatting
+   - Multi-byte data operations
+
+## Command Implementation Preferences
+1. S Command (Already Implemented):
+   - Format: S$xxxx
+   - Displays 16-bit word in binary, hex, and decimal
+   - Example: >S$3000 $3000 => %0001001001101010 $126A 4714
+   - Implementation complete and working correctly
+
+2. W Command (Already Implemented):
+   - Format: W$xxxx yyyy (or W$xxxx $yyyy for hex)
+   - Writes 16-bit word to memory
+   - Supports both decimal and hex input
+   - Displays result in all formats
+   - Implementation complete and working correctly
+
+3. MD Command (To Implement):
+   - Format: MD$xxxx $yyyy
+   - Display memory in 16-byte rows
+   - Always align to 16-byte boundaries
+   - Handle non-aligned inputs correctly
+   - Follow existing command pattern for parsing
+   - Create new displayMemoryBlock function
+
+4. LD Command (To Implement):
+   - Format: LD$xxxx $yyyy
+   - Accept multiple lines of hex data
+   - Each line contains 16 bytes
+   - Store in memory at specified location
+   - Create new loadMemoryBlock function
+   - Reuse hex parsing for each byte
+
+5. GO Command (To Implement):
+   - Format: GO$xxxx
+   - Validate address before execution
+   - Transfer control to specified location
+   - Return to monitor when complete
+   - Save/restore context as needed
+
+## Implementation Strategies
+1. Command Parser Extension:
+   - Follow existing pattern for new command handlers
+   - Add cases for MD, LD, GO in processCmd
+   - Create dedicated processing functions following current style
+   - Reuse existing parseHexValue for addresses and sizes
+
+2. MD Command Implementation:
+   - Parse two addresses (range start and end)
+   - Calculate 16-byte aligned boundaries
+   - Format each line with address and 16 bytes of data
+   - Process row-by-row within the range
+
+3. LD Command Implementation:
+   - Parse address and size
+   - Calculate number of 16-byte blocks needed
+   - Accept input lines, parse 32 hex characters per line (16 bytes)
+   - Store bytes in memory sequentially
+
+4. GO Command Implementation:
+   - Parse and validate address
+   - Prepare context for execution/return
+   - Use JSR to jump to target address
+   - Ensure clean return to monitor program
 
 ## Known Challenges
-1. Documentation:
-   - PDF instruction files need to be accessed
-   - Understanding relationship between HW12 and HW6
-   - Maintaining comprehensive documentation
+1. Block Memory Operations:
+   - Handling 16-byte alignment
+   - Processing multi-line inputs for LD
+   - Formatting multi-line outputs for MD
+   - Error checking for block operations
 
-2. Technical:
-   - Memory safety considerations
-   - Command parsing complexity
-   - Error handling robustness
-   - Integration with existing code
+2. Data Conversion:
+   - Binary/decimal/hex conversions
+   - Converting between string and numeric formats
+   - Supporting both input formats (decimal/hex)
+   - Formatting multi-format output
+
+3. Program Execution:
+   - Safely transferring control to user code
+   - Returning to monitor after execution
+   - Handling potential issues with GO command
 
 ## User Preferences
-1. Project Structure:
-   - Memory bank documentation requested
-   - Clear separation of concerns
-   - Modular code organization
-   - Comprehensive documentation
+1. Error Handling:
+   - Clear error messages
+   - Command examples on error
+   - Program stability (no crashes)
+   - Useful feedback for incorrect inputs
 
-2. Code Style:
-   - Detailed comments required
-   - Clear register usage documentation
-   - Memory map specifications
-   - Algorithm descriptions
+2. Display Formatting:
+   - Binary: %xxxxxxxxxxxxxxxx (16 bits)
+   - Hex: $xxxx (4 digits)
+   - Decimal: xxxxx (no leading zeros)
+   - Memory display: clean 16-byte rows
 
-## Evolution Record
-1. Initial Setup:
-   - Created memory bank structure
-   - Documented base implementation
-   - Identified core functionality
-
-2. Next Phase:
-   - Review instruction files
-   - Understand new requirements
-   - Plan implementation
-   - Begin development
+3. Command Usability:
+   - Intuitive command syntax
+   - Consistent command behavior
+   - Helpful feedback for all operations
+   - Self-explanatory interface
 
 ## Learning Points
-1. Assembly Programming:
-   - Register optimization
-   - Memory management
-   - I/O handling
-   - Command processing
+1. Memory Operations:
+   - Block memory access techniques
+   - Memory alignment considerations
+   - Multi-format memory display
+   - Block data loading strategies
 
-2. Documentation:
-   - Memory bank structure
-   - Technical documentation
-   - Progress tracking
-   - Implementation planning
+2. Command Processing:
+   - Complex command parsing
+   - Multiple parameter formats
+   - Block data handling
+   - Program execution control
 
-*Note: This file will be updated as we learn more about the project requirements and implementation details.* 
+3. Error Handling:
+   - Comprehensive input validation
+   - User-friendly error messages
+   - Program stability techniques
+   - Boundary condition handling
+
+*Note: These insights are based on actual code review and will guide implementation.* 
