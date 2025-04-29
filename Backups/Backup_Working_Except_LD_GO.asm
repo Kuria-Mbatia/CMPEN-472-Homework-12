@@ -65,7 +65,7 @@ MAX_CMD_LEN EQU         80          ; Maximum command length
 ***********************************************************************
 * Data Section - Variables and Strings
 ***********************************************************************
-            ORG         $3000       ; Start of data section - CHANGED FROM $3800 to $3000
+            ORG         $4000       ; Start of data section - Moved from $3800 to avoid code overlap
 
 cmdBuffer   DS.B        MAX_CMD_LEN ; Command input buffer
 cmdLength   DS.B        1           ; Length of command
